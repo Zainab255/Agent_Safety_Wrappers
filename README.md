@@ -85,6 +85,55 @@ The first wrapper that returns `BLOCK` stops the pipeline. A `REQUERY` decision 
 
 The entropy spike on adversarial/jailbreak prompts — where the Red Team sees danger but the Blue Team sees creative writing — is the core signal that static filters miss.
 
+## Where Inference-Time Guidance & Latent-Space Analysis Are Used
+
+This project combines two techniques — **inference-time guidance** (steering model behavior at runtime through prompt construction) and **latent-space analysis** (inspecting internal representations rather than generated text) — across several components:
+
+### Inference-Time Guidance
+
+Inference-time guidance steers model behavior without fine-tuning by injecting role-specific system prompts at the moment of inference.
+
+| File | What happens |
+|---|---|
+| `config/config.json` | Defines three agent personas — each is a system-level instruction that reframes how the model processes the same user input at inference time. |
+| `wrappers/safety_orchestrator.py` → `_build_batch()` | Constructs the actual guided prompts. Each user input is paired with a different persona (`<system>` block), producing three distinct inference-time framings from a single model: **Paranoid** (Red Team), **Helpful** (Blue Team), and **Constitutional** (Judge). |
+| `wrappers/safety_orchestrator.py` → `SANITIZE_TEMPLATE` | When the decision is REQUERY, a rigid sanitization template wraps the original prompt — another form of inference-time guidance that constrains the model's downstream generation to factual, educational responses only. |
+| `pipeline/runner.py` → `evaluate_prompt()` | Applies the sanitized prompt to the generation call when the orchestrator returns REQUERY, closing the loop between guidance and output. |
+
+### Latent-Space Analysis
+
+Latent-space analysis treats the model as a gray box — we read its internal hidden states rather than relying solely on generated text.
+
+| File | What happens |
+|---|---|
+| `models/llm_client.py` → `get_agent_embeddings()` | The core gray-box extraction point. Runs a batched forward pass with `output_hidden_states=True`, then extracts `outputs.hidden_states[-1][:, -1, :]` — the **last layer, last token** embedding for each prompt in the batch. This yields a `[3, hidden_size]` tensor of latent representations. |
+| `models/llm_client.py` → attention mask indexing | Uses the attention mask to find the true final non-padding token per sequence, ensuring the latent vector is meaningful even with variable-length inputs in the batch. |
+| `wrappers/safety_orchestrator.py` → `_compute_safety_entropy()` | Operates entirely in latent space. Computes `cosine_similarity(E_red, E_blue)` between the Red Team and Blue Team embedding vectors, then derives `Safety Entropy = 1 − similarity`. No text is generated or parsed — the safety signal comes purely from geometric disagreement in the model's internal representation space. |
+| `wrappers/safety_orchestrator.py` → `_make_decision()` | Maps the continuous latent-space metric (entropy) to a discrete safety decision using configurable thresholds. |
+
+### How They Work Together
+
+```
+User Prompt
+    │
+    ├──→ [Inference-Time Guidance]  3 persona-framed prompts built
+    │         │
+    │         ▼
+    │    [Latent-Space Analysis]   Single batched forward pass → 3 embeddings
+    │         │
+    │         ▼
+    │    Cosine Similarity (Red vs Blue)  →  Safety Entropy
+    │         │
+    │         ├── Low entropy   → ALLOW
+    │         ├── Mid entropy   → REQUERY  ──→ [Inference-Time Guidance] sanitized template
+    │         └── High entropy  → BLOCK
+    │
+    ▼
+  Final Decision + Metrics logged
+```
+
+The key insight is that neither technique is sufficient alone. Inference-time guidance creates the divergent perspectives, and latent-space analysis quantifies their disagreement without the cost and noise of generating and parsing text from three agents.
+
 ## Output Format
 
 Each JSONL log entry includes:

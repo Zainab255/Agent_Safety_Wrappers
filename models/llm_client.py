@@ -31,6 +31,7 @@ class LLMClient:
 
         model_cfg = self.config["model"]
         self.model_name: str = model_cfg["name"]
+        self.hf_token: Optional[str] = model_cfg.get("hf_token")
         self.device: str = model_cfg.get("device", "auto")
         self.max_new_tokens: int = model_cfg.get("max_new_tokens", 256)
         self.temperature: float = model_cfg.get("temperature", 0.7)
@@ -44,9 +45,11 @@ class LLMClient:
 
     def load(self) -> "LLMClient":
         """Load the tokenizer and model into memory."""
+        token = self.hf_token if self.hf_token and self.hf_token != "YOUR_HF_TOKEN_HERE" else None
+
         logger.info("Loading tokenizer for %s", self.model_name)
         self.tokenizer = AutoTokenizer.from_pretrained(
-            self.model_name, padding_side="left"
+            self.model_name, padding_side="left", token=token
         )
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
@@ -57,6 +60,7 @@ class LLMClient:
             torch_dtype=torch.float16,
             device_map=self.device,
             output_hidden_states=True,
+            token=token,
         )
         self.model.eval()
         return self
