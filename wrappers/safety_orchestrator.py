@@ -2,8 +2,18 @@
 
 Instantiates three cognitive perspectives (Red Team, Blue Team, Judge)
 in a single batched forward pass and derives a continuous "Safety Entropy"
+<<<<<<< HEAD
 metric from the geometric disagreement of their last-token hidden-state
 embeddings.
+=======
+metric from the geometric disagreement of their L2-normalised last-token
+hidden-state embeddings.
+
+Embedding extraction details (for reproducibility):
+    Layer:   Last transformer layer (``hidden_states[-1]``)
+    Pooling: Last non-padding token per sequence (attention-mask indexed)
+    Norm:    L2-normalised to unit length before cosine computation
+>>>>>>> fd982a5 (Formalized Safety Entropy and strengthened evaluation framework)
 
 Decision logic:
     Entropy < sanitize_threshold  → ALLOW
@@ -15,6 +25,10 @@ from __future__ import annotations
 
 import json
 import logging
+<<<<<<< HEAD
+=======
+import time
+>>>>>>> fd982a5 (Formalized Safety Entropy and strengthened evaluation framework)
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -46,6 +60,13 @@ class SafetyOrchestrator(BaseWrapper):
         An already-loaded LLMClient instance (model in memory).
     config_path : str | None
         Path to config.json. Uses the repo default when *None*.
+<<<<<<< HEAD
+=======
+    sequential : bool
+        If *True*, run the three persona prompts one at a time instead of
+        as a single batch.  Used for the parallel-vs-sequential latency
+        comparison experiment.
+>>>>>>> fd982a5 (Formalized Safety Entropy and strengthened evaluation framework)
     """
 
     name = "safety_orchestrator"
@@ -54,12 +75,20 @@ class SafetyOrchestrator(BaseWrapper):
         self,
         llm_client: LLMClient,
         config_path: Optional[str] = None,
+<<<<<<< HEAD
+=======
+        sequential: bool = False,
+>>>>>>> fd982a5 (Formalized Safety Entropy and strengthened evaluation framework)
     ):
         config_file = Path(config_path) if config_path else CONFIG_PATH
         with open(config_file) as f:
             self.config = json.load(f)
 
         self.llm_client = llm_client
+<<<<<<< HEAD
+=======
+        self.sequential = sequential
+>>>>>>> fd982a5 (Formalized Safety Entropy and strengthened evaluation framework)
         self.personas: Dict[str, str] = self.config["agent_personas"]
         self.block_threshold: float = self.config["thresholds"]["entropy_block_threshold"]
         self.sanitize_threshold: float = self.config["thresholds"]["entropy_sanitize_threshold"]
@@ -73,7 +102,10 @@ class SafetyOrchestrator(BaseWrapper):
         batch: List[str] = []
         for role in ("red_team", "blue_team", "judge"):
             system_prompt = self.personas[role]
+<<<<<<< HEAD
             # Format: "<system>\n{persona}\n</system>\n\nUser: {prompt}"
+=======
+>>>>>>> fd982a5 (Formalized Safety Entropy and strengthened evaluation framework)
             full_prompt = (
                 f"<system>\n{system_prompt}\n</system>\n\nUser: {user_prompt}"
             )
@@ -81,19 +113,57 @@ class SafetyOrchestrator(BaseWrapper):
         return batch
 
     # ------------------------------------------------------------------
+<<<<<<< HEAD
+=======
+    # Embedding retrieval (parallel vs sequential)
+    # ------------------------------------------------------------------
+
+    def _get_embeddings(self, batch: List[str]) -> Tuple[torch.Tensor, int]:
+        """Retrieve embeddings, counting the number of model forward passes.
+
+        Returns:
+            (embeddings [3, hidden_size], model_calls)
+        """
+        if not self.sequential:
+            # Single batched forward pass — the parallel path
+            embeddings = self.llm_client.get_agent_embeddings(batch)
+            return embeddings, 1
+
+        # Sequential: one forward pass per persona
+        parts = []
+        for prompt in batch:
+            emb = self.llm_client.get_agent_embeddings([prompt])
+            parts.append(emb)
+        embeddings = torch.cat(parts, dim=0)
+        return embeddings, len(batch)
+
+    # ------------------------------------------------------------------
+>>>>>>> fd982a5 (Formalized Safety Entropy and strengthened evaluation framework)
     # Entropy calculation
     # ------------------------------------------------------------------
 
     @staticmethod
     def _compute_safety_entropy(
         embeddings: torch.Tensor,
+<<<<<<< HEAD
     ) -> Tuple[float, float]:
         """Compute Safety Entropy from the Red/Blue embedding pair.
+=======
+    ) -> Dict[str, float]:
+        """Compute Safety Entropy from L2-normalised Red/Blue/Judge embeddings.
+
+        Procedure (for paper reproducibility):
+            1. Extract E_red (index 0), E_blue (index 1), E_judge (index 2).
+            2. L2-normalise each vector to unit length.
+            3. Compute pairwise cosine similarities.
+            4. Safety Entropy = 1 − cos(E_red_norm, E_blue_norm).
+>>>>>>> fd982a5 (Formalized Safety Entropy and strengthened evaluation framework)
 
         Args:
             embeddings: Tensor of shape ``[3, hidden_size]`` (red, blue, judge).
 
         Returns:
+<<<<<<< HEAD
             (safety_entropy, red_blue_similarity)
         """
         red = embeddings[0]   # Red Team embedding
@@ -105,6 +175,33 @@ class SafetyOrchestrator(BaseWrapper):
 
         entropy = 1.0 - similarity
         return entropy, similarity
+=======
+            Dict with keys: safety_entropy, red_blue_similarity,
+            red_judge_similarity, blue_judge_similarity.
+        """
+        red = embeddings[0]
+        blue = embeddings[1]
+        judge = embeddings[2]
+
+        # L2 normalisation to unit vectors
+        red_norm = F.normalize(red, p=2, dim=0)
+        blue_norm = F.normalize(blue, p=2, dim=0)
+        judge_norm = F.normalize(judge, p=2, dim=0)
+
+        # Pairwise cosine similarities (equivalent to dot product after L2 norm)
+        rb_sim = torch.dot(red_norm, blue_norm).item()
+        rj_sim = torch.dot(red_norm, judge_norm).item()
+        bj_sim = torch.dot(blue_norm, judge_norm).item()
+
+        entropy = 1.0 - rb_sim
+
+        return {
+            "safety_entropy": round(entropy, 6),
+            "red_blue_similarity": round(rb_sim, 6),
+            "red_judge_similarity": round(rj_sim, 6),
+            "blue_judge_similarity": round(bj_sim, 6),
+        }
+>>>>>>> fd982a5 (Formalized Safety Entropy and strengthened evaluation framework)
 
     # ------------------------------------------------------------------
     # Decision logic
@@ -151,30 +248,67 @@ class SafetyOrchestrator(BaseWrapper):
         """Run the parallel safety orchestration pipeline.
 
         1. Build the 3-prompt batch (Red, Blue, Judge).
+<<<<<<< HEAD
         2. Extract last-token embeddings in a single forward pass.
         3. Compute Safety Entropy (1 − cosine similarity of Red & Blue).
         4. Return a ``WrapperResult`` with decision and metrics.
+=======
+        2. Extract last-token embeddings (parallel or sequential).
+        3. L2-normalise and compute Safety Entropy.
+        4. Return a ``WrapperResult`` with decision and full metrics.
+>>>>>>> fd982a5 (Formalized Safety Entropy and strengthened evaluation framework)
         """
         batch = self._build_batch(prompt)
         logger.debug("Orchestrator batch built (%d prompts)", len(batch))
 
+<<<<<<< HEAD
         embeddings = self.llm_client.get_agent_embeddings(batch)
         logger.debug("Embeddings shape: %s", embeddings.shape)
 
         entropy, similarity = self._compute_safety_entropy(embeddings)
         logger.info(
             "Safety Entropy=%.4f  Red-Blue Similarity=%.4f", entropy, similarity
+=======
+        t_start = time.perf_counter()
+        embeddings, model_calls = self._get_embeddings(batch)
+        latency_s = time.perf_counter() - t_start
+
+        logger.debug("Embeddings shape: %s", embeddings.shape)
+
+        metrics = self._compute_safety_entropy(embeddings)
+        entropy = metrics["safety_entropy"]
+
+        logger.info(
+            "Safety Entropy=%.4f  Red-Blue Sim=%.4f  (mode=%s, %.3fs)",
+            entropy,
+            metrics["red_blue_similarity"],
+            "sequential" if self.sequential else "parallel",
+            latency_s,
+>>>>>>> fd982a5 (Formalized Safety Entropy and strengthened evaluation framework)
         )
 
         decision, explanation, sanitized = self._make_decision(entropy, prompt)
 
+<<<<<<< HEAD
+=======
+        metrics.update({
+            "mode": "sequential" if self.sequential else "parallel",
+            "model_calls": model_calls,
+            "latency_seconds": round(latency_s, 6),
+        })
+
+>>>>>>> fd982a5 (Formalized Safety Entropy and strengthened evaluation framework)
         return WrapperResult(
             wrapper=self.name,
             decision=decision,
             explanation=explanation,
             sanitized_prompt=sanitized,
+<<<<<<< HEAD
             metrics={
                 "safety_entropy": round(entropy, 6),
                 "red_blue_similarity": round(similarity, 6),
             },
+=======
+            metrics=metrics,
+>>>>>>> fd982a5 (Formalized Safety Entropy and strengthened evaluation framework)
         )
