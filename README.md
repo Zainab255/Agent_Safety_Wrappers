@@ -1,4 +1,4 @@
-# One Pass, No Output: Generation-Free Jailbreak Detection via Latent Representational Conflict
+# Latent Representational Conflict as a Pre-Generation Safety Signal for Large Language Models
 
 **Parallel Safety Orchestrator (PSO)** — Official Implementation
 
